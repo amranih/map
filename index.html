@@ -1,8 +1,10 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Leaflet Map Export Tool (With CSV Export for Firebase)</title>
+    <title>Leaflet Map Export Tool (Mobile Ready)</title>
     
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
     <!-- 1. Leaflet Core CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
     
@@ -10,26 +12,43 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
     
     <style>
+        /* BASE MOBILE-FRIENDLY CSS */
+        body, html {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            height: 100%;
+            overflow-x: hidden;
+        }
         #map {
-            height: 600px; 
+            /* Set height dynamically, accounting for controls */
+            height: calc(100vh - 180px); /* 100% viewport height minus space for controls */
             width: 100%;
             border: 1px solid #ccc;
+            touch-action: pan-x pan-y; /* Improves touch responsiveness */
+        }
+        h1 {
+            font-size: 1.5em;
+            margin: 10px 5px;
         }
         .controls {
-            margin-bottom: 10px;
+            padding: 10px 5px;
+            text-align: center;
         }
         button {
-            padding: 8px 15px;
-            margin: 5px;
+            padding: 8px 10px; /* Reduced padding for smaller screens */
+            margin: 3px;
             cursor: pointer;
+            font-size: 0.9em;
+            white-space: nowrap; /* Prevents wrapping in small buttons */
         }
+        /* POPUP and ICON styles remain the same for functionality */
         .popup-form input {
             width: 90%;
             margin-bottom: 5px;
             padding: 2px;
             border: 1px solid #ccc;
         }
-        /* Custom CSS for colored markers */
         .bus-icon, .taxi-icon, .tram-icon {
             border-radius: 50%; width: 20px; height: 20px; line-height: 20px; 
             text-align: center; font-size: 10px; border: 2px solid white;
@@ -48,27 +67,27 @@
     <!-- 4. Leaflet Geocoding/Search Control JavaScript -->
     <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
 
-    <!-- 5. SheetJS Library (for XLSX export AND import) - Also handles CSV functionality -->
+    <!-- 5. SheetJS Library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
-    <h1>Transport Station Mapper (Firebase CSV Export Ready)</h1>
+    <h1>Transport Station Mapper (Mobile Ready)</h1>
     
     <div class="controls">
         <!-- Marker Mode Buttons -->
-        <button id="mode-bus" onclick="setMarkerMode('Bus');">Add Bus Station</button>
-        <button id="mode-taxi" onclick="setMarkerMode('Taxi');">Add Taxi Station</button>
-        <button id="mode-tram" onclick="setMarkerMode('Tram');">Add Tram Station</button>
+        <button id="mode-bus" onclick="setMarkerMode('Bus');">Bus</button>
+        <button id="mode-taxi" onclick="setMarkerMode('Taxi');">Taxi</button>
+        <button id="mode-tram" onclick="setMarkerMode('Tram');">Tram</button>
         
         <br>
         
         <!-- Import/Export Buttons -->
         <input type="file" id="fileUpload" accept=".xlsx, .xls" style="display: none;">
-        <button onclick="document.getElementById('fileUpload').click();">Load Locations from Excel</button>
-        <button onclick="exportToExcel()">Export to Excel (XLSX)</button>
-        <button onclick="exportToCsv()">Export to CSV (Firebase Ready)</button>
+        <button onclick="document.getElementById('fileUpload').click();">Load Excel</button>
+        <button onclick="exportToExcel()">Export XLSX</button>
+        <button onclick="exportToCsv()">Export CSV</button>
         
-        <p style="font-size: 0.9em; margin-top: 5px;">Radius default is 10. Click a marker to edit name/coordinates/radius.</p>
+        <p style="font-size: 0.9em; margin-top: 5px;">Click to set type, then click map. Drag markers to refine.</p>
     </div>
     
     <!-- THE MAP CONTAINER -->
@@ -80,13 +99,17 @@
         let allLocations = []; 
         let markerCounter = 0; 
         let currentMode = null; 
-        const DEFAULT_RADIUS = 10; // New default radius
+        const DEFAULT_RADIUS = 10; 
 
         // =========================
-        // MAP INITIALIZATION
+        // MAP INITIALIZATION (Updated for Geolocation)
         // =========================
         function initMap() {
-            map = L.map('map').setView([48.8566, 2.3522], 12); 
+            // Default view in case geolocation fails
+            const defaultCenter = [39.8283, -98.5795]; // Center of the US
+            const defaultZoom = 5;
+
+            map = L.map('map').setView(defaultCenter, defaultZoom); 
 
             L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 maxZoom: 19,
@@ -98,9 +121,37 @@
             document.getElementById('fileUpload').addEventListener('change', loadFromExcel, false);
             
             setMarkerMode('Bus'); 
-        }
+            
+            // --- GEOLOCATION LOGIC ---
+            if ("geolocation" in navigator) {
+                navigator.geolocation.getCurrentPosition(
+                    function(position) {
+                        const lat = position.coords.latitude;
+                        const lng = position.coords.longitude;
+                        const userLocation = [lat, lng];
 
-        // ... (UI and Icon functions remain the same) ...
+                        // Set map view to user's location
+                        map.setView(userLocation, 14); 
+
+                        // Optionally place a temporary marker for the user's current location
+                        L.marker(userLocation, { opacity: 0.5 }).addTo(map)
+                            .bindPopup("You are here").openPopup();
+                    }, 
+                    function(error) {
+                        console.warn('Geolocation failed: ' + error.message);
+                        alert("Could not detect your location. Using default map view.");
+                    },
+                    { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+                );
+            } else {
+                alert("Geolocation is not supported by this browser.");
+            }
+        }
+        // ... (Remaining functions below are largely the same, but included for completeness) ...
+
+        // =========================
+        // UI AND ICON SETUP
+        // =========================
         function setMarkerMode(mode) {
             currentMode = mode;
             document.querySelectorAll('.controls button').forEach(btn => btn.classList.remove('selected-mode'));
@@ -121,7 +172,7 @@
         }
         
         // =========================
-        // POPUP CONTENT FUNCTIONS (Updated for Radius)
+        // POPUP CONTENT FUNCTIONS
         // =========================
         function getEditPopupContent(location) {
              return `
@@ -168,7 +219,7 @@
         }
 
         // =========================
-        // CORE MARKER CREATION FUNCTION (Updated for Radius)
+        // CORE MARKER CREATION FUNCTION
         // =========================
         function addMarkerAndSave(placeName, lat, lng, type, radius) {
             markerCounter++;
@@ -181,7 +232,7 @@
                 'id': markerId,
                 'Name': placeName,
                 'Type': type,
-                'Radius': parseFloat(radius || DEFAULT_RADIUS), // <<< NEW FIELD
+                'Radius': parseFloat(radius || DEFAULT_RADIUS), 
                 'Latitude': parseFloat(lat).toFixed(6),
                 'Longitude': parseFloat(lng).toFixed(6),
                 'marker': marker 
@@ -190,7 +241,6 @@
             
             marker.addTo(map);
 
-            // Dragend listener: update data and refresh popup
             marker.on('dragend', function(e) {
                 const newLatLng = marker.getLatLng();
                 const index = allLocations.findIndex(loc => loc.id === markerId);
@@ -199,13 +249,11 @@
                     allLocations[index].Latitude = newLatLng.lat.toFixed(6);
                     allLocations[index].Longitude = newLatLng.lng.toFixed(6);
 
-                    // Rebind and open the popup to show the edit form with new coordinates
                     const updatedContent = getEditPopupContent(allLocations[index]);
                     marker.setPopupContent(updatedContent).openPopup();
                 }
             });
 
-            // Set up the initial popup content
             marker.bindPopup(getEditPopupContent(newLocation));
             marker.on('click', function() {
                 const index = allLocations.findIndex(loc => loc.id === markerId);
@@ -217,7 +265,7 @@
 
 
         // =========================
-        // EDIT ENTRY FUNCTIONS (Updated for Radius)
+        // EDIT ENTRY FUNCTIONS
         // =========================
         
         function updateMarkerPosition(idToEdit) {
@@ -243,17 +291,16 @@
             const newName = document.getElementById(`name_${idToEdit}`).value;
             const newLat = parseFloat(document.getElementById(`lat_${idToEdit}`).value);
             const newLng = parseFloat(document.getElementById(`lng_${idToEdit}`).value);
-            const newRad = parseFloat(document.getElementById(`rad_${idToEdit}`).value); // <<< GET NEW RADIUS
+            const newRad = parseFloat(document.getElementById(`rad_${idToEdit}`).value); 
 
             if (!newName.trim()) { alert("Name cannot be empty."); return; }
             if (isNaN(newLat) || isNaN(newLng)) { alert("Latitude and Longitude must be valid numbers."); return; }
             if (isNaN(newRad) || newRad <= 0) { alert("Radius must be a positive number."); return; }
 
-            // Update the data
             location.Name = newName.trim();
             location.Latitude = newLat.toFixed(6);
             location.Longitude = newLng.toFixed(6);
-            location.Radius = newRad; // <<< UPDATE RADIUS
+            location.Radius = newRad; 
             
             location.marker.bindTooltip(newName);
             location.marker.closePopup();
@@ -278,7 +325,7 @@
 
 
         // =========================
-        // IMPORT FROM EXCEL FUNCTION (Updated for Radius)
+        // IMPORT FROM EXCEL FUNCTION
         // =========================
         function loadFromExcel(e) {
             const file = e.target.files[0];
@@ -298,33 +345,27 @@
                 const worksheet = workbook.Sheets[sheetName];
                 const jsonLocations = XLSX.utils.sheet_to_json(worksheet);
 
-                // Check for required headers
-                if (jsonLocations.length > 0 && 
-                    jsonLocations[0].Name && 
-                    jsonLocations[0].Type && 
-                    jsonLocations[0].Latitude && 
-                    jsonLocations[0].Longitude) {
+                if (jsonLocations.length > 0) {
 
                     jsonLocations.forEach(loc => {
                         const name = String(loc.Name || "Imported Location");
                         const type = String(loc.Type || "Unknown");
-                        const lat = parseFloat(loc.Latitude);
-                        const lng = parseFloat(loc.Longitude);
-                        // Get radius, default to 10 if not present
+                        const lat = parseFloat(loc.Latitude || loc.Location.split(',')[0]); // Check Location field if Lat/Lng missing (for CSV export format)
+                        const lng = parseFloat(loc.Longitude || loc.Location.split(',')[1]);
                         const rad = parseFloat(loc.Radius) || DEFAULT_RADIUS; 
 
                         if (!isNaN(lat) && !isNaN(lng)) {
                             addMarkerAndSave(name, lat, lng, type, rad);
                         }
                     });
-                    alert(`Successfully loaded ${allLocations.length} locations from Excel!`);
+                    alert(`Successfully loaded ${allLocations.length} locations from Excel/CSV!`);
 
                     if (allLocations.length > 0) {
                         map.panTo([allLocations[0].Latitude, allLocations[0].Longitude]);
                     }
 
                 } else {
-                    alert("Error: The Excel file must contain 'Name', 'Type', 'Latitude', and 'Longitude' columns.");
+                    alert("Error: The file must contain 'Name', 'Type', 'Latitude', and 'Longitude' columns (or 'Location' for CSV).");
                 }
             };
 
@@ -333,7 +374,7 @@
 
 
         // =========================
-        // EXPORT TO EXCEL FUNCTION (Updated for Radius)
+        // EXPORT TO EXCEL FUNCTION
         // =========================
         function exportToExcel() {
             if (allLocations.length === 0) {
@@ -346,7 +387,7 @@
                 'Type': loc.Type,
                 'Latitude': loc.Latitude, 
                 'Longitude': loc.Longitude,
-                'Radius': loc.Radius // <<< EXPORT RADIUS
+                'Radius': loc.Radius 
             }));
 
             const worksheet = XLSX.utils.json_to_sheet(exportData);
@@ -358,7 +399,7 @@
         }
         
         // =========================
-        // EXPORT TO CSV FUNCTION (NEW - Firebase Ready)
+        // EXPORT TO CSV FUNCTION
         // =========================
         function exportToCsv() {
              if (allLocations.length === 0) {
@@ -366,22 +407,16 @@
                 return;
             }
 
-            // 1. Prepare data for Firebase CSV format
             const csvData = allLocations.map(loc => ({
-                // Geopoint format for Firebase/CSV import
                 'Location': `${loc.Latitude},${loc.Longitude}`, 
                 'Name': loc.Name,
                 'Type': loc.Type,
                 'Radius': loc.Radius 
             }));
 
-            // 2. Use SheetJS to convert JSON to CSV
             const worksheet = XLSX.utils.json_to_sheet(csvData);
-            
-            // 3. Convert worksheet to CSV string
             const csv = XLSX.utils.sheet_to_csv(worksheet);
 
-            // 4. Create a Blob and trigger download
             const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement("a");
             const url = URL.createObjectURL(blob);
