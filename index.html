@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Leaflet Map Export Tool (With CSV Export for Firebase)</title>
+    
+    <!-- 1. Leaflet Core CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    
+    <!-- 2. Leaflet Geocoding/Search Control CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
+    
+    <style>
+        #map {
+            height: 600px; 
+            width: 100%;
+            border: 1px solid #ccc;
+        }
+        .controls {
+            margin-bottom: 10px;
+        }
+        button {
+            padding: 8px 15px;
+            margin: 5px;
+            cursor: pointer;
+        }
+        .popup-form input {
+            width: 90%;
+            margin-bottom: 5px;
+            padding: 2px;
+            border: 1px solid #ccc;
+        }
+        /* Custom CSS for colored markers */
+        .bus-icon, .taxi-icon, .tram-icon {
+            border-radius: 50%; width: 20px; height: 20px; line-height: 20px; 
+            text-align: center; font-size: 10px; border: 2px solid white;
+        }
+        .bus-icon { background-color: #f00; color: white; }
+        .taxi-icon { background-color: #ffc107; color: black; }
+        .tram-icon { background-color: #007bff; color: white; }
+        .selected-mode {
+            outline: 3px solid #4CAF50; 
+        }
+    </style>
+    
+    <!-- 3. Leaflet Core JavaScript -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <!-- 4. Leaflet Geocoding/Search Control JavaScript -->
+    <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+
+    <!-- 5. SheetJS Library (for XLSX export AND import) - Also handles CSV functionality -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+    <h1>Transport Station Mapper (Firebase CSV Export Ready)</h1>
+    
+    <div class="controls">
+        <!-- Marker Mode Buttons -->
+        <button id="mode-bus" onclick="setMarkerMode('Bus');">Add Bus Station</button>
+        <button id="mode-taxi" onclick="setMarkerMode('Taxi');">Add Taxi Station</button>
+        <button id="mode-tram" onclick="setMarkerMode('Tram');">Add Tram Station</button>
+        
+        <br>
+        
+        <!-- Import/Export Buttons -->
+        <input type="file" id="fileUpload" accept=".xlsx, .xls" style="display: none;">
+        <button onclick="document.getElementById('fileUpload').click();">Load Locations from Excel</button>
+        <button onclick="exportToExcel()">Export to Excel (XLSX)</button>
+        <button onclick="exportToCsv()">Export to CSV (Firebase Ready)</button>
+        
+        <p style="font-size: 0.9em; margin-top: 5px;">Radius default is 10. Click a marker to edit name/coordinates/radius.</p>
+    </div>
+    
+    <!-- THE MAP CONTAINER -->
+    <div id="map"></div>
+    
+    <!-- 6. Main Application Logic (JavaScript) -->
+    <script>
+        let map;
+        let allLocations = []; 
+        let markerCounter = 0; 
+        let currentMode = null; 
+        const DEFAULT_RADIUS = 10; // New default radius
+
+        // =========================
+        // MAP INITIALIZATION
+        // =========================
+        function initMap() {
+            map = L.map('map').setView([48.8566, 2.3522], 12); 
+
+            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(map);
+
+            L.Control.geocoder().addTo(map);
+            map.on('click', onMapClick); 
+            document.getElementById('fileUpload').addEventListener('change', loadFromExcel, false);
+            
+            setMarkerMode('Bus'); 
+        }
+
+        // ... (UI and Icon functions remain the same) ...
+        function setMarkerMode(mode) {
+            currentMode = mode;
+            document.querySelectorAll('.controls button').forEach(btn => btn.classList.remove('selected-mode'));
+            const modeBtn = document.getElementById(`mode-${mode.toLowerCase()}`);
+            if (modeBtn) {
+                 modeBtn.classList.add('selected-mode');
+            }
+        }
+        
+        function getMarkerIcon(type) {
+            const iconClass = type.toLowerCase() + '-icon';
+            return L.divIcon({
+                className: iconClass,
+                html: type[0],
+                iconSize: [24, 24],
+                iconAnchor: [12, 12]
+            });
+        }
+        
+        // =========================
+        // POPUP CONTENT FUNCTIONS (Updated for Radius)
+        // =========================
+        function getEditPopupContent(location) {
+             return `
+                <div class="popup-form">
+                    <label>Type: <b>${location.Type}</b></label><br>
+                    <label for="name_${location.id}">Name:</label>
+                    <input type="text" id="name_${location.id}" value="${location.Name}"><br>
+                    
+                    <label for="lat_${location.id}">Lat:</label>
+                    <input type="text" id="lat_${location.id}" value="${location.Latitude}" onchange="updateMarkerPosition(${location.id})"><br>
+                    
+                    <label for="lng_${location.id}">Lng:</label>
+                    <input type="text" id="lng_${location.id}" value="${location.Longitude}" onchange="updateMarkerPosition(${location.id})"><br>
+                    
+                    <label for="rad_${location.id}">Radius:</label>
+                    <input type="number" id="rad_${location.id}" value="${location.Radius}"><br>
+                    
+                    <button onclick="editEntry(${location.id})">Save Changes</button>
+                    <button onclick="deleteMarker(${location.id})" style="background-color: #dc3545; color: white;">Delete Marker</button>
+                    <p style="margin: 5px 0 0; font-size: 0.8em; color: #555;">(Dragging also updates Lat/Lng)</p>
+                </div>
+            `;
+        }
+
+        // =========================
+        // MAP CLICK HANDLER
+        // =========================
+        function onMapClick(e) {
+            if (!currentMode) {
+                alert("Please select a station type first (Bus, Taxi, or Tram).");
+                return;
+            }
+            
+            const lat = e.latlng.lat;
+            const lng = e.latlng.lng;
+
+            const placeName = prompt(`Enter a name for the ${currentMode} Station:`, `${currentMode} Station ${markerCounter + 1}`);
+
+            if (!placeName || placeName.trim() === "") {
+                return;
+            }
+            
+            addMarkerAndSave(placeName, lat, lng, currentMode, DEFAULT_RADIUS);
+        }
+
+        // =========================
+        // CORE MARKER CREATION FUNCTION (Updated for Radius)
+        // =========================
+        function addMarkerAndSave(placeName, lat, lng, type, radius) {
+            markerCounter++;
+            const markerId = markerCounter;
+            
+            const icon = getMarkerIcon(type);
+            const marker = L.marker([lat, lng], { icon: icon, draggable: true });
+
+            const newLocation = {
+                'id': markerId,
+                'Name': placeName,
+                'Type': type,
+                'Radius': parseFloat(radius || DEFAULT_RADIUS), // <<< NEW FIELD
+                'Latitude': parseFloat(lat).toFixed(6),
+                'Longitude': parseFloat(lng).toFixed(6),
+                'marker': marker 
+            };
+            allLocations.push(newLocation);
+            
+            marker.addTo(map);
+
+            // Dragend listener: update data and refresh popup
+            marker.on('dragend', function(e) {
+                const newLatLng = marker.getLatLng();
+                const index = allLocations.findIndex(loc => loc.id === markerId);
+
+                if (index !== -1) {
+                    allLocations[index].Latitude = newLatLng.lat.toFixed(6);
+                    allLocations[index].Longitude = newLatLng.lng.toFixed(6);
+
+                    // Rebind and open the popup to show the edit form with new coordinates
+                    const updatedContent = getEditPopupContent(allLocations[index]);
+                    marker.setPopupContent(updatedContent).openPopup();
+                }
+            });
+
+            // Set up the initial popup content
+            marker.bindPopup(getEditPopupContent(newLocation));
+            marker.on('click', function() {
+                const index = allLocations.findIndex(loc => loc.id === markerId);
+                if (index !== -1) {
+                    marker.setPopupContent(getEditPopupContent(allLocations[index]));
+                }
+            });
+        }
+
+
+        // =========================
+        // EDIT ENTRY FUNCTIONS (Updated for Radius)
+        // =========================
+        
+        function updateMarkerPosition(idToEdit) {
+            const index = allLocations.findIndex(loc => loc.id === idToEdit);
+            if (index === -1) return;
+
+            const newLat = parseFloat(document.getElementById(`lat_${idToEdit}`).value);
+            const newLng = parseFloat(document.getElementById(`lng_${idToEdit}`).value);
+            const location = allLocations[index];
+
+            if (!isNaN(newLat) && !isNaN(newLng)) {
+                location.marker.setLatLng([newLat, newLng]);
+                location.Latitude = newLat.toFixed(6);
+                location.Longitude = newLng.toFixed(6);
+            }
+        }
+
+        function editEntry(idToEdit) {
+            const index = allLocations.findIndex(loc => loc.id === idToEdit);
+            if (index === -1) return;
+
+            const location = allLocations[index];
+            const newName = document.getElementById(`name_${idToEdit}`).value;
+            const newLat = parseFloat(document.getElementById(`lat_${idToEdit}`).value);
+            const newLng = parseFloat(document.getElementById(`lng_${idToEdit}`).value);
+            const newRad = parseFloat(document.getElementById(`rad_${idToEdit}`).value); // <<< GET NEW RADIUS
+
+            if (!newName.trim()) { alert("Name cannot be empty."); return; }
+            if (isNaN(newLat) || isNaN(newLng)) { alert("Latitude and Longitude must be valid numbers."); return; }
+            if (isNaN(newRad) || newRad <= 0) { alert("Radius must be a positive number."); return; }
+
+            // Update the data
+            location.Name = newName.trim();
+            location.Latitude = newLat.toFixed(6);
+            location.Longitude = newLng.toFixed(6);
+            location.Radius = newRad; // <<< UPDATE RADIUS
+            
+            location.marker.bindTooltip(newName);
+            location.marker.closePopup();
+            alert(`Entry for '${newName}' updated successfully.`);
+        }
+
+
+        // =========================
+        // DELETE MARKER FUNCTION
+        // =========================
+        function deleteMarker(idToDelete) {
+            const index = allLocations.findIndex(loc => loc.id === idToDelete);
+
+            if (index !== -1) {
+                const locationToRemove = allLocations[index];
+                locationToRemove.marker.remove();
+                allLocations.splice(index, 1);
+                
+                alert(`Marker '${locationToRemove.Name}' deleted.`);
+            }
+        }
+
+
+        // =========================
+        // IMPORT FROM EXCEL FUNCTION (Updated for Radius)
+        // =========================
+        function loadFromExcel(e) {
+            const file = e.target.files[0];
+            if (!file) { return; }
+            
+            const reader = new FileReader();
+            
+            reader.onload = function(event) {
+                allLocations.forEach(loc => loc.marker.remove());
+                allLocations = [];
+                markerCounter = 0;
+
+                const data = new Uint8Array(event.target.result);
+                const workbook = XLSX.read(data, {type: 'array'});
+                
+                const sheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[sheetName];
+                const jsonLocations = XLSX.utils.sheet_to_json(worksheet);
+
+                // Check for required headers
+                if (jsonLocations.length > 0 && 
+                    jsonLocations[0].Name && 
+                    jsonLocations[0].Type && 
+                    jsonLocations[0].Latitude && 
+                    jsonLocations[0].Longitude) {
+
+                    jsonLocations.forEach(loc => {
+                        const name = String(loc.Name || "Imported Location");
+                        const type = String(loc.Type || "Unknown");
+                        const lat = parseFloat(loc.Latitude);
+                        const lng = parseFloat(loc.Longitude);
+                        // Get radius, default to 10 if not present
+                        const rad = parseFloat(loc.Radius) || DEFAULT_RADIUS; 
+
+                        if (!isNaN(lat) && !isNaN(lng)) {
+                            addMarkerAndSave(name, lat, lng, type, rad);
+                        }
+                    });
+                    alert(`Successfully loaded ${allLocations.length} locations from Excel!`);
+
+                    if (allLocations.length > 0) {
+                        map.panTo([allLocations[0].Latitude, allLocations[0].Longitude]);
+                    }
+
+                } else {
+                    alert("Error: The Excel file must contain 'Name', 'Type', 'Latitude', and 'Longitude' columns.");
+                }
+            };
+
+            reader.readAsArrayBuffer(file);
+        }
+
+
+        // =========================
+        // EXPORT TO EXCEL FUNCTION (Updated for Radius)
+        // =========================
+        function exportToExcel() {
+            if (allLocations.length === 0) {
+                alert("Please add some locations before exporting.");
+                return;
+            }
+
+            const exportData = allLocations.map(loc => ({
+                'Name': loc.Name,
+                'Type': loc.Type,
+                'Latitude': loc.Latitude, 
+                'Longitude': loc.Longitude,
+                'Radius': loc.Radius // <<< EXPORT RADIUS
+            }));
+
+            const worksheet = XLSX.utils.json_to_sheet(exportData);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Locations"); 
+            XLSX.writeFile(workbook, "Map_Locations_Export.xlsx"); 
+
+            alert("Data exported successfully!");
+        }
+        
+        // =========================
+        // EXPORT TO CSV FUNCTION (NEW - Firebase Ready)
+        // =========================
+        function exportToCsv() {
+             if (allLocations.length === 0) {
+                alert("Please add some locations before exporting.");
+                return;
+            }
+
+            // 1. Prepare data for Firebase CSV format
+            const csvData = allLocations.map(loc => ({
+                // Geopoint format for Firebase/CSV import
+                'Location': `${loc.Latitude},${loc.Longitude}`, 
+                'Name': loc.Name,
+                'Type': loc.Type,
+                'Radius': loc.Radius 
+            }));
+
+            // 2. Use SheetJS to convert JSON to CSV
+            const worksheet = XLSX.utils.json_to_sheet(csvData);
+            
+            // 3. Convert worksheet to CSV string
+            const csv = XLSX.utils.sheet_to_csv(worksheet);
+
+            // 4. Create a Blob and trigger download
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            
+            link.setAttribute("href", url);
+            link.setAttribute("download", "Firebase_Locations_Export.csv");
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            alert("Data exported to CSV successfully!");
+        }
+
+
+        // <<<--- Start the map --->>>
+        initMap(); 
+    </script>
+</body>
+</html>
